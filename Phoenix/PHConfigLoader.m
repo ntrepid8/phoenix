@@ -175,13 +175,46 @@ static NSString* PHConfigPath = @"~/.phoenix.js";
             path = [requirePathUrl absoluteString];
         }
         
-        if(! [[NSFileManager defaultManager] fileExistsAtPath: path isDirectory: NULL]) {
-            [self showJsException: [NSString stringWithFormat: @"Require: cannot find path %@", path]];
-        } else {
+        NSURL *pathUrl = [NSURL URLWithString:path];
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        BOOL isDir;
+        BOOL fileExists = [fileManager fileExistsAtPath: path isDirectory: &isDir];
+
+        // require a single JS file
+        if (fileExists && ! isDir){
             [self addConfigPath: path];
-            
-            NSString* _js = [NSString stringWithContentsOfFile: path encoding: NSUTF8StringEncoding error: NULL];
-            [weakCtx evaluateScript:_js];
+            NSString* _js = [NSString stringWithContentsOfFile: path
+                                                      encoding: NSUTF8StringEncoding
+                                                         error: NULL];
+            return [weakCtx evaluateScript:_js];
+
+        // require a directory of JS files
+        } else if (fileExists && isDir){
+            NSArray *contents = [fileManager contentsOfDirectoryAtURL:pathUrl
+                                           includingPropertiesForKeys:@[]
+                                                              options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                                error:nil];
+            NSPredicate *predicate = [NSPredicate predicateWithFormat:@"pathExtension == 'js'"];
+            JSValue *requireResp = [JSValue valueWithNewObjectInContext:weakCtx];
+            for (NSURL *fileURL in [contents filteredArrayUsingPredicate:predicate]) {
+                NSString *fileURLPath = [fileURL path];
+                NSString *fileName = [fileURL lastPathComponent];
+                NSString *requireKey = [fileName substringToIndex: fileName.length-3];
+                // Enumerate each .js file in directory
+                [self addConfigPath: fileURLPath];
+                NSError *err;
+                NSString* _js = [NSString stringWithContentsOfFile: fileURLPath
+                                                          encoding: NSUTF8StringEncoding
+                                                             error: &err];
+                requireResp[requireKey] = [weakCtx evaluateScript:_js];
+            }
+            return requireResp;
+
+        // require path does not exist (or something)
+        } else {
+            [self showJsException: [NSString stringWithFormat: @"Require: cannot find path %@", path]];
+            JSValue *requireResp = [JSValue valueWithNewObjectInContext:weakCtx];
+            return requireResp;
         }
     };
     
